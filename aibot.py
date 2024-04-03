@@ -70,7 +70,15 @@ def get_text(messages, **extra_params):
         **{**OPENAI_TEXT_PARAMS, **extra_params}
     )
     logger.debug(f"OpenAI response: {response}")
+    if extra_params.get('stream'):
+        return response
     return response['choices'][0]['message']['content']
+
+def yield_text(messages, **extra_params):
+    for chunk in get_text(messages, stream=True, **extra_params):
+        chunk_message = chunk['choices'][0]['delta']
+        if content := chunk_message.get('content'):
+            yield content
 
 def get_image(prompt, **extra_params):
     response = openai.Image.create(prompt=prompt, **{**OPENAI_IMG_PARAMS, **extra_params})
@@ -249,8 +257,11 @@ def handle_dm(ack, payload, say):
     handle_conversation(say, payload, is_dm=True)
 
 def handle_conversation(say, payload, is_dm=False):
+    if "subtype" in payload:  # "message_changed", "message_deleted", "bot_message" etc.
+        return
+
     users_in_convo = {my_user_id: id_to_user_info(my_user_id)}
-    latest_message = hydrate_user_ids(payload["text"])
+    latest_message = hydrate_user_ids(payload["text"]) if "text" in payload else ""
 
     # if we were mentioned in a thread, say() should respond in the thread
     if 'thread_ts' in payload:
@@ -330,9 +341,23 @@ def handle_conversation(say, payload, is_dm=False):
             content=response,
         )
     else:
-        response = get_text(prompt_messages)
-        response = response.rsplit('[name_separator]', 1)[-1]
-        say(response, response_type="in_channel")
+        # this should stream the results to the user by posting and editing a message ...
+        # response = get_text(prompt_messages)
+        # response = response.rsplit('[name_separator]', 1)[-1]
+        # say(response, response_type="in_channel")
+        posted_message = app.client.chat_postMessage(channel=payload["channel"], text="Generating response...", username=BOT_NAME)
+        ts = posted_message['ts']  # Timestamp of the message
+        channel_id = posted_message['channel']
+        response = ""
+        last_update_time = time.time()
+        for chunk in yield_text(prompt_messages):
+            response += chunk
+            response = response.rsplit('[name_separator]', 1)[-1]
+            current_time = time.time()
+            if current_time - last_update_time >= 0.5:
+                app.client.chat_update(channel=channel_id, ts=ts, text=(response or "_Generating response..._"))
+                last_update_time = current_time
+        app.client.chat_update(channel=channel_id, ts=ts, text=(response or "no response"))
 
 
 if __name__ == "__main__":
