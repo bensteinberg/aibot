@@ -25,7 +25,7 @@ app = App()
 my_user_id = app.client.auth_test().data["user_id"]
 openai.api_key = os.getenv('OPENAI_API_KEY')
 OPENAI_TEXT_PARAMS = {
-    'model': os.getenv("MODEL", "gpt-4"),
+    'model': os.getenv("MODEL", "gpt-4-turbo-preview"),
     'temperature': 0.7,
     # 'max_tokens': 250,
     # 'top_p': 1,
