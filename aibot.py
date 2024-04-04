@@ -19,9 +19,9 @@ from dotenv import load_dotenv
 from slack_sdk.errors import SlackApiError
 
 # setup
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 load_dotenv()
+logging.basicConfig(level=os.environ.get('LOGLEVEL', 'INFO').upper())
+logger = logging.getLogger(__name__)
 app = App()
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 my_user_id = app.client.auth_test().data["user_id"]
