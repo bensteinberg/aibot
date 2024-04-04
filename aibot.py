@@ -13,7 +13,8 @@ import tiktoken
 from pyquery import PyQuery
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-import openai
+from openai import OpenAI
+
 from dotenv import load_dotenv
 from slack_sdk.errors import SlackApiError
 
@@ -22,10 +23,10 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 load_dotenv()
 app = App()
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 my_user_id = app.client.auth_test().data["user_id"]
-openai.api_key = os.getenv('OPENAI_API_KEY')
 OPENAI_TEXT_PARAMS = {
-    'model': os.getenv("MODEL", "gpt-4"),
+    'model': os.getenv("MODEL", "gpt-4-turbo-preview"),
     'temperature': 0.7,
     # 'max_tokens': 250,
     # 'top_p': 1,
@@ -65,17 +66,23 @@ def ttl_cache(seconds=60):
 def get_text(messages, **extra_params):
     if type(messages) is str:
         messages = [{"role": "user", "content": messages}]
-    response = openai.ChatCompletion.create(
-        messages=messages,
-        **{**OPENAI_TEXT_PARAMS, **extra_params}
-    )
+    response = openai_client.chat.completions.create(messages=messages,
+                                                     **{**OPENAI_TEXT_PARAMS, **extra_params})
     logger.debug(f"OpenAI response: {response}")
-    return response['choices'][0]['message']['content']
+    if extra_params.get('stream'):
+        return response
+    return response.choices[0].message.content
+
+def yield_text(messages, **extra_params):
+    for chunk in get_text(messages, stream=True, **extra_params):
+        chunk_message = chunk.choices[0].delta
+        if chunk_message.content:
+            yield chunk_message.content
 
 def get_image(prompt, **extra_params):
-    response = openai.Image.create(prompt=prompt, **{**OPENAI_IMG_PARAMS, **extra_params})
+    response = openai_client.images.generate(prompt=prompt, **{**OPENAI_IMG_PARAMS, **extra_params})
     logger.debug(f"OpenAI response: {response}")
-    return response['data'][0]['url']
+    return response.data[0].url
 
 def block_text(text):
     """Return simple text string formatted for Slack block."""
@@ -249,8 +256,11 @@ def handle_dm(ack, payload, say):
     handle_conversation(say, payload, is_dm=True)
 
 def handle_conversation(say, payload, is_dm=False):
+    if "subtype" in payload:  # "message_changed", "message_deleted", "bot_message" etc.
+        return
+
     users_in_convo = {my_user_id: id_to_user_info(my_user_id)}
-    latest_message = hydrate_user_ids(payload["text"])
+    latest_message = hydrate_user_ids(payload["text"]) if "text" in payload else ""
 
     # if we were mentioned in a thread, say() should respond in the thread
     if 'thread_ts' in payload:
@@ -293,7 +303,12 @@ def handle_conversation(say, payload, is_dm=False):
             role = 'user'
             if message['user'] not in bios:
                 # recalculate system_prompt each time we add a new user, so we can accurately check token count
-                bios[message['user']] = f'First name: {user_info.get("first_name", user_info.get("real_name"))}. This person also goes by: {user_info.get("display_name")}. Pronouns: {user_info.get("pronouns", "they/them")}. What you know about this user: "{user_info.get("Info for AbbyLarby", "they like ducks!")}"'
+                bios[message['user']] = (
+                    f'First name: {user_info.get("first_name", user_info.get("real_name"))}. '
+                    f'This person also goes by: {user_info.get("display_name")}. '
+                    f'Pronouns: {user_info.get("pronouns", "they/them")}. '
+                    f'What you know about this user: "{user_info.get("Info for AbbyLarby", "they like ducks!")}"'
+                )
                 system_prompt = get_system_prompt(bios)
         content = hydrate_user_ids(message['text'])
         if not content.strip():
@@ -330,9 +345,33 @@ def handle_conversation(say, payload, is_dm=False):
             content=response,
         )
     else:
-        response = get_text(prompt_messages)
-        response = response.rsplit('[name_separator]', 1)[-1]
-        say(response, response_type="in_channel")
+        # check if we should stream
+        latest_user = users_in_convo.get(payload.get("user"), {})
+        streaming_speed = latest_user.get('AbbyLarby streaming speed', 0.5)
+        try:
+            streaming_speed = float(streaming_speed)
+        except ValueError:
+            streaming_speed = 0.5
+        if not streaming_speed:
+            # return non-streaming response
+            response = get_text(prompt_messages)
+            response = response.rsplit('[name_separator]', 1)[-1]
+            say(response, response_type="in_channel")
+        else:
+            # return streaming response
+            posted_message = app.client.chat_postMessage(channel=payload["channel"], text="Generating response...", username=BOT_NAME)
+            ts = posted_message['ts']  # Timestamp of the message
+            channel_id = posted_message['channel']
+            response = ""
+            last_update_time = time.time()
+            for chunk in yield_text(prompt_messages):
+                response += chunk
+                response = response.rsplit('[name_separator]', 1)[-1]
+                current_time = time.time()
+                if current_time - last_update_time >= streaming_speed:
+                    app.client.chat_update(channel=channel_id, ts=ts, text=(response or "_Generating response..._"))
+                    last_update_time = current_time
+            app.client.chat_update(channel=channel_id, ts=ts, text=(response or "no response"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+openai
+slack-bolt
+watchdog
+python-dotenv
+pyquery
+tiktoken
+pip-tools
