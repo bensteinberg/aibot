@@ -13,7 +13,8 @@ import tiktoken
 from pyquery import PyQuery
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-import openai
+from openai import OpenAI
+
 from dotenv import load_dotenv
 from slack_sdk.errors import SlackApiError
 
@@ -22,8 +23,8 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 load_dotenv()
 app = App()
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 my_user_id = app.client.auth_test().data["user_id"]
-openai.api_key = os.getenv('OPENAI_API_KEY')
 OPENAI_TEXT_PARAMS = {
     'model': os.getenv("MODEL", "gpt-4-turbo-preview"),
     'temperature': 0.7,
@@ -65,25 +66,23 @@ def ttl_cache(seconds=60):
 def get_text(messages, **extra_params):
     if type(messages) is str:
         messages = [{"role": "user", "content": messages}]
-    response = openai.ChatCompletion.create(
-        messages=messages,
-        **{**OPENAI_TEXT_PARAMS, **extra_params}
-    )
+    response = openai_client.chat.completions.create(messages=messages,
+                                                     **{**OPENAI_TEXT_PARAMS, **extra_params})
     logger.debug(f"OpenAI response: {response}")
     if extra_params.get('stream'):
         return response
-    return response['choices'][0]['message']['content']
+    return response.choices[0].message.content
 
 def yield_text(messages, **extra_params):
     for chunk in get_text(messages, stream=True, **extra_params):
-        chunk_message = chunk['choices'][0]['delta']
-        if content := chunk_message.get('content'):
-            yield content
+        chunk_message = chunk.choices[0].delta
+        if chunk_message.content:
+            yield chunk_message.content
 
 def get_image(prompt, **extra_params):
-    response = openai.Image.create(prompt=prompt, **{**OPENAI_IMG_PARAMS, **extra_params})
+    response = openai_client.images.generate(prompt=prompt, **{**OPENAI_IMG_PARAMS, **extra_params})
     logger.debug(f"OpenAI response: {response}")
-    return response['data'][0]['url']
+    return response.data[0].url
 
 def block_text(text):
     """Return simple text string formatted for Slack block."""
