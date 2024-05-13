@@ -34,7 +34,7 @@ variables another way.
 
 (lazy requirements for now)
 
-    pip install requirements.txt
+    pip install -r requirements.txt
 
 Copy .env.example to .env and write credentials.
 

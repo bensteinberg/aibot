@@ -26,7 +26,7 @@ app = App()
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 my_user_id = app.client.auth_test().data["user_id"]
 OPENAI_TEXT_PARAMS = {
-    'model': os.getenv("MODEL", "gpt-4-turbo-preview"),
+    'model': os.getenv("MODEL", "gpt-4o"),
     'temperature': 0.7,
     # 'max_tokens': 250,
     # 'top_p': 1,
@@ -339,8 +339,8 @@ def handle_conversation(say, payload, is_dm=False):
 
     if is_command(latest_message, "prompt", is_dm):
         response = json.dumps(OPENAI_TEXT_PARAMS, indent=4)+"\n\n"+json.dumps(prompt_messages, indent=4)
-        app.client.files_upload(
-            channels=payload["channel"],
+        app.client.files_upload_v2(
+            channel=payload["channel"],
             filename="prompt.json",
             content=response,
         )
