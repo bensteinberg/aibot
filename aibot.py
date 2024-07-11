@@ -13,7 +13,7 @@ import tiktoken
 from pyquery import PyQuery
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-from openai import OpenAI
+from openai import OpenAI, AzureOpenAI
 
 from dotenv import load_dotenv
 from slack_sdk.errors import SlackApiError
@@ -23,7 +23,19 @@ load_dotenv()
 logging.basicConfig(level=os.environ.get('LOGLEVEL', 'INFO').upper())
 logger = logging.getLogger(__name__)
 app = App()
-openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+if azure_endpoint := os.getenv("AZURE_OPENAI_ENDPOINT"):
+    openai_client = AzureOpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        api_version=os.getenv("AZURE_OPENAI_VERSION") or "2024-06-01",
+        azure_endpoint=azure_endpoint,
+    )
+else:
+    openai_client = OpenAI(
+        api_key=os.getenv('OPENAI_API_KEY'),
+        base_url=os.getenv('OPENAI_BASE_URL') or None,
+    )
+
 my_user_id = app.client.auth_test().data["user_id"]
 OPENAI_TEXT_PARAMS = {
     'model': os.getenv("MODEL", "gpt-4o"),
@@ -75,9 +87,10 @@ def get_text(messages, **extra_params):
 
 def yield_text(messages, **extra_params):
     for chunk in get_text(messages, stream=True, **extra_params):
-        chunk_message = chunk.choices[0].delta
-        if chunk_message.content:
-            yield chunk_message.content
+        if chunk.choices:
+            chunk_message = chunk.choices[0].delta
+            if chunk_message.content:
+                yield chunk_message.content
 
 def get_image(prompt, **extra_params):
     response = openai_client.images.generate(prompt=prompt, **{**OPENAI_IMG_PARAMS, **extra_params})
@@ -338,7 +351,15 @@ def handle_conversation(say, payload, is_dm=False):
     prompt_messages.insert(0, {"role": "system", "content": system_prompt})
 
     if is_command(latest_message, "prompt", is_dm):
-        response = json.dumps(OPENAI_TEXT_PARAMS, indent=4)+"\n\n"+json.dumps(prompt_messages, indent=4)
+        response = (
+            json.dumps({
+                'client': type(openai_client).__name__,
+                'base_url': str(openai_client.base_url),
+                **OPENAI_TEXT_PARAMS,
+            }, indent=4)+
+            "\n\n"+
+            json.dumps(prompt_messages, indent=4)
+        )
         app.client.files_upload_v2(
             channel=payload["channel"],
             filename="prompt.json",
